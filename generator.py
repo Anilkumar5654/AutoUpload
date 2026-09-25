@@ -44,6 +44,13 @@ from pathlib import Path
 from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, vfx
 from PIL import Image, ImageDraw, ImageFont
 
+# MoviePy 1.0.3's resize effect calls the removed PIL.Image.ANTIALIAS
+# constant. Pillow is pinned to 9.5.0 in requirements.txt for this reason;
+# this patch is a safety net in case a transitive dependency ever pulls in
+# a newer Pillow anyway.
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
