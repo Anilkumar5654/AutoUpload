@@ -23,6 +23,9 @@ Optional:
   PRIVACY_STATUS         default "unlisted"
   SONGS_DIR              default "songs"
   BACKGROUND_VIDEO_PATH  default "assets/background.mp4"
+  BACKGROUND_DIR         default "assets/backgrounds" (if present, one file
+                          is picked at random per run instead of the single
+                          BACKGROUND_VIDEO_PATH — lets you rotate visuals)
   OUTPUT_DIR             default "output"
   HISTORY_PATH           default "data/upload_history.json"
   DEFAULT_PLAYLIST_ID    default "" (no playlist)
@@ -33,6 +36,8 @@ import sys
 import json
 import random
 import logging
+import hashlib
+import traceback
 import datetime
 from pathlib import Path
 
@@ -63,6 +68,7 @@ YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
 SONGS_DIR = os.environ.get("SONGS_DIR", "songs")
 BACKGROUND_VIDEO_PATH = os.environ.get("BACKGROUND_VIDEO_PATH", "assets/background.mp4")
+BACKGROUND_DIR = os.environ.get("BACKGROUND_DIR", "assets/backgrounds")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
 HISTORY_PATH = os.environ.get("HISTORY_PATH", "data/upload_history.json")
 PRIVACY_STATUS = os.environ.get("PRIVACY_STATUS", "unlisted")
@@ -130,6 +136,28 @@ def already_uploaded(history: list) -> set:
     return {record["song"] for record in history if record.get("status") == "success"}
 
 
+def already_uploaded_hashes(history: list) -> set:
+    """
+    Audio content hashes (SHA-256) that have already succeeded. Catches a
+    song that was renamed/re-encoded but is the same underlying audio,
+    which a filename-only check would miss.
+    """
+    return {
+        record["audio_hash"]
+        for record in history
+        if record.get("status") == "success" and record.get("audio_hash")
+    }
+
+
+def compute_audio_hash(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """SHA-256 of the file's bytes, used for content-based duplicate detection."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def record_result(history: list, song_filename: str, status: str, **extra) -> list:
     entry = {
         "song": song_filename,
@@ -146,8 +174,14 @@ def record_result(history: list, song_filename: str, status: str, **extra) -> li
 # --------------------------------------------------------------------------
 
 def pick_next_song(songs_dir: str = SONGS_DIR, history: list = None) -> Path | None:
+    """
+    Picks the first alphabetical song not yet uploaded — checked by both
+    filename AND content hash, so a renamed/re-encoded duplicate of an
+    already-uploaded track is still skipped.
+    """
     history = history or []
-    uploaded = already_uploaded(history)
+    uploaded_names = already_uploaded(history)
+    uploaded_hashes = already_uploaded_hashes(history)
 
     songs_path = Path(songs_dir)
     if not songs_path.exists():
@@ -162,8 +196,16 @@ def pick_next_song(songs_dir: str = SONGS_DIR, history: list = None) -> Path | N
         return None
 
     for candidate in candidates:
-        if candidate.name not in uploaded:
-            return candidate
+        if candidate.name in uploaded_names:
+            continue
+        if uploaded_hashes:
+            try:
+                if compute_audio_hash(candidate) in uploaded_hashes:
+                    log.info("Skipping '%s' — content matches an already-uploaded track (renamed duplicate).", candidate.name)
+                    continue
+            except OSError as exc:
+                log.warning("Could not hash '%s' for duplicate check: %s", candidate.name, exc)
+        return candidate
 
     return None  # everything already uploaded successfully
 
@@ -215,11 +257,32 @@ def generate_metadata(song_path: Path, overrides: dict) -> dict:
 # Video generation
 # --------------------------------------------------------------------------
 
+def pick_background_video(video_path: str = BACKGROUND_VIDEO_PATH, backgrounds_dir: str = BACKGROUND_DIR) -> Path:
+    """
+    If assets/backgrounds/ exists and has video files, pick one at random
+    so repeated uploads don't all reuse the same visual. Otherwise fall
+    back to the single BACKGROUND_VIDEO_PATH.
+    """
+    VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm")
+    backgrounds_path = Path(backgrounds_dir)
+    if backgrounds_path.exists():
+        options = sorted(
+            p for p in backgrounds_path.iterdir()
+            if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+        )
+        if options:
+            chosen = random.choice(options)
+            log.info("Picked background '%s' from %s (%d available).", chosen.name, backgrounds_dir, len(options))
+            return chosen
+    return Path(video_path)
+
+
 def build_video(audio_path: Path, video_path: str = BACKGROUND_VIDEO_PATH, output_dir: str = OUTPUT_DIR) -> str:
-    video_file = Path(video_path)
+    video_file = pick_background_video(video_path)
     if not video_file.exists():
         raise FileNotFoundError(
-            f"Background video not found at '{video_path}'. Add one at assets/background.mp4."
+            f"No background video found. Add one at '{video_path}', or drop several into "
+            f"'{BACKGROUND_DIR}/' to rotate between them."
         )
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file not found at '{audio_path}'.")
@@ -235,7 +298,7 @@ def build_video(audio_path: Path, video_path: str = BACKGROUND_VIDEO_PATH, outpu
         log.info("Loading audio track: %s", audio_path)
         audio_clip = AudioFileClip(str(audio_path))
 
-        log.info("Loading background video: %s", video_path)
+        log.info("Loading background video: %s", video_file)
         video_clip = VideoFileClip(str(video_file))
 
         if video_clip.duration < audio_clip.duration:
@@ -443,6 +506,12 @@ def main():
 
     log.info("Selected next song: %s", song_path.name)
 
+    try:
+        audio_hash = compute_audio_hash(song_path)
+    except OSError as exc:
+        log.warning("Could not hash song file: %s", exc)
+        audio_hash = None
+
     overrides = load_song_metadata_overrides()
     metadata = generate_metadata(song_path, overrides)
 
@@ -450,7 +519,7 @@ def main():
         video_path = build_video(song_path)
     except FileNotFoundError as exc:
         log.error(str(exc))
-        history = record_result(history, song_path.name, "failed", error=str(exc))
+        history = record_result(history, song_path.name, "failed", audio_hash=audio_hash, error=str(exc))
         save_history(history)
         sys.exit(1)
 
@@ -460,7 +529,7 @@ def main():
         youtube = get_authenticated_service()
     except EnvironmentError as exc:
         log.error(str(exc))
-        history = record_result(history, song_path.name, "failed", error=str(exc))
+        history = record_result(history, song_path.name, "failed", audio_hash=audio_hash, error=str(exc))
         save_history(history)
         sys.exit(1)
 
@@ -468,7 +537,7 @@ def main():
         video_id = upload_video(youtube, video_path, metadata, privacy_status=PRIVACY_STATUS)
     except HttpError as exc:
         log.error("YouTube API error during upload: %s", exc)
-        history = record_result(history, song_path.name, "failed", error=str(exc))
+        history = record_result(history, song_path.name, "failed", audio_hash=audio_hash, error=str(exc))
         save_history(history)
         sys.exit(1)
 
@@ -479,6 +548,7 @@ def main():
         history,
         song_path.name,
         "success",
+        audio_hash=audio_hash,
         video_id=video_id,
         title=metadata["title"],
         privacy_status=PRIVACY_STATUS,
@@ -489,4 +559,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Top-level safety net: ANY unexpected exception still gets logged and
+    # exits non-zero (so the Actions run shows red), instead of silently
+    # crashing with no trace of what happened.
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        log.error("Unhandled exception in generator.py:\n%s", traceback.format_exc())
+        sys.exit(1)
