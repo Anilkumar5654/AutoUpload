@@ -31,10 +31,10 @@ uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 .
 ├── .github/workflows/auto_upload.yml
 ├── assets/
-│   ├── background.mp4           # fallback / single visual (add this)
-│   └── backgrounds/              # optional: add several clips here instead
-│       ├── bg01.mp4               # to rotate between visuals — if this
-│       └── bg02.mp4               # folder has files, it's used over the one above
+│   ├── background.mp4           # fallback: a single video (add this)
+│   └── backgrounds/              # optional: rotate between MULTIPLE visuals
+│       ├── bg01.mp4               # videos work as-is
+│       └── bg02.jpg               # still images auto-convert to a slow-zoom video
 ├── songs/
 │   ├── metadata.json            # optional per-song overrides
 │   ├── song1.mp3                 # add your tracks here
@@ -49,6 +49,13 @@ uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 > Note: only `assets/background.mp4` (or `assets/backgrounds/`) and files
 > under `songs/` are actually read by `generator.py` — nothing else in
 > `assets/` is used, so don't leave unrelated audio files there.
+
+**Videos vs. images in `assets/backgrounds/`:** you can mix both in the same
+folder. A video (`.mp4`, `.mov`, `.mkv`, `.webm`) is looped or trimmed to
+match the song's length as usual. A still image (`.jpg`, `.jpeg`, `.png`,
+`.webp`) is automatically turned into a video for that song's full duration,
+with a slow continuous zoom-in so it doesn't look like a frozen frame. Either
+way, one file is picked at random per run.
 
 ---
 
