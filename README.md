@@ -8,13 +8,22 @@ uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 ## What's new in v2
 
 - ✅ Multiple-song queue — drop as many tracks as you want in `songs/`
-- ✅ Duplicate-upload protection via `data/upload_history.json`
+- ✅ Duplicate-upload protection — by filename **and** SHA-256 audio content
+  hash, so a renamed/re-encoded copy of an already-uploaded track is still
+  caught
 - ✅ Upload history / status tracking (success + failed runs both logged)
 - ✅ Automatic thumbnail generation (video frame + title overlay)
 - ✅ Per-song title/description/tags via `songs/metadata.json`
 - ✅ Optional YouTube playlist assignment
 - ✅ Automatic retry with backoff on auth/upload calls
 - ✅ History file auto-committed back to the repo after each run
+- ✅ Background rotation — drop several clips in `assets/backgrounds/` and
+  one is picked at random each run (falls back to the single
+  `assets/background.mp4` if that folder doesn't exist)
+- ✅ Workflow concurrency lock — a manual run and a scheduled run can never
+  overlap and double-upload the same song
+- ✅ Top-level crash safety net — any unexpected exception is logged with a
+  full traceback and fails the run cleanly instead of disappearing silently
 
 ## Repository structure
 
@@ -22,7 +31,10 @@ uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 .
 ├── .github/workflows/auto_upload.yml
 ├── assets/
-│   └── background.mp4          # shared looping visual (add this)
+│   ├── background.mp4           # fallback / single visual (add this)
+│   └── backgrounds/              # optional: add several clips here instead
+│       ├── bg01.mp4               # to rotate between visuals — if this
+│       └── bg02.mp4               # folder has files, it's used over the one above
 ├── songs/
 │   ├── metadata.json            # optional per-song overrides
 │   ├── song1.mp3                 # add your tracks here
@@ -33,6 +45,10 @@ uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 ├── requirements.txt
 └── README.md
 ```
+
+> Note: only `assets/background.mp4` (or `assets/backgrounds/`) and files
+> under `songs/` are actually read by `generator.py` — nothing else in
+> `assets/` is used, so don't leave unrelated audio files there.
 
 ---
 
