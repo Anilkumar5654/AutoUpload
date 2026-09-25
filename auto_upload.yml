@@ -18,7 +18,7 @@ on:
           - private
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-upload:
@@ -61,14 +61,30 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           PRIVACY_STATUS: ${{ github.event.inputs.privacy_status || 'unlisted' }}
+          DEFAULT_PLAYLIST_ID: ${{ secrets.DEFAULT_PLAYLIST_ID }}
         run: |
           python generator.py
+
+      - name: Commit updated upload history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/upload_history.json 2>/dev/null)" ]; then
+            git add data/upload_history.json
+            git commit -m "chore: update upload history [skip ci]"
+            git push
+          else
+            echo "No history changes to commit."
+          fi
 
       - name: Upload generated video as workflow artifact (backup)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: generated-video
-          path: output/*.mp4
+          path: |
+            output/*.mp4
+            output/*.jpg
           retention-days: 7
           if-no-files-found: ignore
