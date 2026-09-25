@@ -5,6 +5,14 @@ lofi video, uploads it to YouTube with a custom thumbnail and SEO
 metadata, and tracks everything in an upload history — so nothing gets
 uploaded twice. Runs on a schedule (or manually) via GitHub Actions.
 
+## What's new in v3 — fully automatic, zero manual songs
+
+- ✅ **Free, open-source music generation (MusicGen)** — when `songs/` has
+  no unpublished track left, the pipeline generates a brand-new original
+  lofi track itself using Meta's MusicGen model (runs locally in the
+  workflow, no API key, no cost). You never have to add songs manually —
+  every run is genuinely automatic end-to-end.
+
 ## What's new in v2
 
 - ✅ Multiple-song queue — drop as many tracks as you want in `songs/`
@@ -121,15 +129,44 @@ permissions → Read and write permissions**.
 
 ## 4. Add your media
 
-- `assets/background.mp4` — one shared looping visual.
-- `songs/*.mp3` (or `.wav` / `.m4a`) — as many tracks as you like. The
-  script always picks the **first alphabetically that hasn't been
-  uploaded yet**, so name them `01_song.mp3`, `02_song.mp3`, etc. if you
-  want a specific order.
+- `assets/background.mp4` (or `assets/backgrounds/` — see above) — this is
+  still required; the pipeline doesn't generate visuals, only audio.
+- `songs/*.mp3` (or `.wav` / `.m4a`) — **optional now.** If you drop tracks
+  here, the pipeline uses them (first alphabetical unpublished one, so
+  name them `01_song.mp3`, `02_song.mp3`, etc. for a specific order). If
+  `songs/` is empty or everything in it has already been uploaded, the
+  pipeline automatically generates a new original lofi track with
+  MusicGen instead — no manual step needed.
 - Optionally add entries to `songs/metadata.json`, keyed by filename
-  *without* extension, to set a custom title/description/tags/playlist
-  for a specific song. Anything you leave out falls back to an
-  auto-generated lofi template.
+  *without* extension, for a manually-added song's custom
+  title/description/tags/playlist. Auto-generated MusicGen tracks always
+  use the auto-generated title templates (they have no fixed filename to
+  key off of).
+
+### About the MusicGen auto-generation step
+
+- Uses `facebook/musicgen-small` (the free, open-source small model) via
+  Hugging Face `transformers` — runs entirely inside the GitHub Actions
+  runner, no external account or API key.
+- **CPU-only and slow:** free GitHub Actions runners have no GPU, so
+  generating even a 60-second track can take 10–20+ minutes. The workflow
+  timeout is set to 120 minutes to give it room; the model weights (~1–2
+  GB) are cached between runs via `actions/cache` so only the *first* run
+  is slow to download.
+- Track length is controlled by the `MUSICGEN_DURATION_SECONDS`
+  environment variable (default 60s) — set it as a repository **variable**
+  (Settings → Secrets and variables → Actions → **Variables** tab, not
+  Secrets) if you want longer/shorter generated tracks. Longer tracks take
+  proportionally longer to generate.
+- Quality is rougher and more ambient/loopy than a paid service like
+  Suno — it's the trade-off for $0 cost and no external dependency. If
+  you later want higher quality, you can still drop hand-picked or
+  Suno-generated tracks into `songs/` any time; the pipeline always
+  prefers real files in `songs/` before falling back to generating one.
+- Generated tracks are saved as `songs/musicgen_<timestamp>.wav` for that
+  run only — they are **not** committed back to the repo (see
+  `.gitignore`), since they've already been uploaded to YouTube by the
+  time the run ends and don't need to persist.
 
 ## 5. Run it
 
