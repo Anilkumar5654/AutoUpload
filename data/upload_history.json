@@ -8,5 +8,12 @@
     "title": "Chill Lofi Mix for Deep Focus & Study 📚 | Songs with Anil",
     "privacy_status": "unlisted",
     "url": "https://youtu.be/GwrrmdGObzs"
+  },
+  {
+    "song": "musicgen_20260925_122015.wav",
+    "status": "failed",
+    "timestamp": "2026-09-25T12:20:32.891465Z",
+    "audio_hash": "97de5d67e238d7260c0f3f92f513464e776fb4dfa34b1a72e84b012e424619d7",
+    "error": "<HttpError 403 when requesting https://youtube.googleapis.com/youtube/v3/channels?part=snippet%2CcontentDetails&mine=true&alt=json returned \"Request had insufficient authentication scopes.\". Details: \"[{'message': 'Insufficient Permission', 'domain': 'global', 'reason': 'insufficientPermissions'}]\">"
   }
 ]
