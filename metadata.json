@@ -1,0 +1,10 @@
+{
+  "_readme": "Key each entry by the audio filename WITHOUT its extension. Any field you omit falls back to an auto-generated default. Delete the _readme key or leave it — it's ignored by the script.",
+
+  "song1": {
+    "title": "Midnight Rain Lofi - Deep Focus Beats | Songs with Anil",
+    "description": "A slow, rainy-night lofi mix built for late study sessions and deep work.\n\n🔔 Subscribe to Songs with Anil for new uploads every week!\n\n#lofi #studymusic #chillbeats",
+    "tags": ["lofi", "rain lofi", "study music", "night study", "chill beats"],
+    "playlist_id": ""
+  }
+}
