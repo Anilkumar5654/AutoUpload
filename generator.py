@@ -41,7 +41,7 @@ import traceback
 import datetime
 from pathlib import Path
 
-from moviepy.editor import VideoFileClip, AudioFileClip, vfx
+from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, vfx
 from PIL import Image, ImageDraw, ImageFont
 
 from google.oauth2.credentials import Credentials
@@ -257,18 +257,23 @@ def generate_metadata(song_path: Path, overrides: dict) -> dict:
 # Video generation
 # --------------------------------------------------------------------------
 
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm")
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+
+
 def pick_background_video(video_path: str = BACKGROUND_VIDEO_PATH, backgrounds_dir: str = BACKGROUND_DIR) -> Path:
     """
-    If assets/backgrounds/ exists and has video files, pick one at random
-    so repeated uploads don't all reuse the same visual. Otherwise fall
-    back to the single BACKGROUND_VIDEO_PATH.
+    If assets/backgrounds/ exists and has video OR image files, pick one at
+    random so repeated uploads don't all reuse the same visual. A still
+    image is automatically turned into a slow-zoom video clip in
+    build_video() below. Otherwise falls back to the single
+    BACKGROUND_VIDEO_PATH (which must be a video).
     """
-    VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm")
     backgrounds_path = Path(backgrounds_dir)
     if backgrounds_path.exists():
         options = sorted(
             p for p in backgrounds_path.iterdir()
-            if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+            if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
         )
         if options:
             chosen = random.choice(options)
@@ -278,14 +283,16 @@ def pick_background_video(video_path: str = BACKGROUND_VIDEO_PATH, backgrounds_d
 
 
 def build_video(audio_path: Path, video_path: str = BACKGROUND_VIDEO_PATH, output_dir: str = OUTPUT_DIR) -> str:
-    video_file = pick_background_video(video_path)
-    if not video_file.exists():
+    background_file = pick_background_video(video_path)
+    if not background_file.exists():
         raise FileNotFoundError(
-            f"No background video found. Add one at '{video_path}', or drop several into "
-            f"'{BACKGROUND_DIR}/' to rotate between them."
+            f"No background video/image found. Add a video at '{video_path}', or drop videos "
+            f"and/or images into '{BACKGROUND_DIR}/' to rotate between them."
         )
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file not found at '{audio_path}'.")
+
+    is_image = background_file.suffix.lower() in IMAGE_EXTENSIONS
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -298,15 +305,23 @@ def build_video(audio_path: Path, video_path: str = BACKGROUND_VIDEO_PATH, outpu
         log.info("Loading audio track: %s", audio_path)
         audio_clip = AudioFileClip(str(audio_path))
 
-        log.info("Loading background video: %s", video_file)
-        video_clip = VideoFileClip(str(video_file))
-
-        if video_clip.duration < audio_clip.duration:
-            log.info("Looping video to match audio duration (%.1fs).", audio_clip.duration)
-            video_clip = video_clip.fx(vfx.loop, duration=audio_clip.duration)
+        if is_image:
+            log.info("Background is a still image (%s) — generating a slow-zoom video for %.1fs.", background_file.name, audio_clip.duration)
+            base_clip = ImageClip(str(background_file)).set_duration(audio_clip.duration)
+            # Subtle continuous zoom-in ("Ken Burns" effect) so a static
+            # image doesn't look like a frozen frame for the whole video.
+            duration = max(audio_clip.duration, 1)
+            video_clip = base_clip.fx(vfx.resize, lambda t: 1 + 0.04 * (t / duration))
         else:
-            log.info("Trimming video to match audio duration (%.1fs).", audio_clip.duration)
-            video_clip = video_clip.subclip(0, audio_clip.duration)
+            log.info("Loading background video: %s", background_file)
+            video_clip = VideoFileClip(str(background_file))
+
+            if video_clip.duration < audio_clip.duration:
+                log.info("Looping video to match audio duration (%.1fs).", audio_clip.duration)
+                video_clip = video_clip.fx(vfx.loop, duration=audio_clip.duration)
+            else:
+                log.info("Trimming video to match audio duration (%.1fs).", audio_clip.duration)
+                video_clip = video_clip.subclip(0, audio_clip.duration)
 
         final_clip = video_clip.set_audio(audio_clip)
 
