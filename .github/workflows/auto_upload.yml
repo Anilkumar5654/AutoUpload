@@ -20,6 +20,13 @@ on:
 permissions:
   contents: write
 
+# Prevents a manual run and a scheduled run from overlapping — without this,
+# two runs can both read the same upload_history.json before either writes
+# back, and end up uploading the same song twice (and racing on git push).
+concurrency:
+  group: youtube-auto-upload
+  cancel-in-progress: false
+
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
