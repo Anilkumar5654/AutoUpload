@@ -29,6 +29,13 @@ Optional:
   OUTPUT_DIR             default "output"
   HISTORY_PATH           default "data/upload_history.json"
   DEFAULT_PLAYLIST_ID    default "" (no playlist)
+  YOUTUBE_CHANNEL_ID     default "" — if set, the pipeline verifies BOTH
+                          (a) before uploading, that the OAuth credentials
+                          are authenticated as this exact channel, and
+                          (b) after uploading, that the uploaded video's
+                          channelId matches it. If they don't match, the
+                          run stops/fails instead of silently uploading to
+                          (or reporting success for) the wrong channel.
 """
 
 import os
@@ -433,6 +440,120 @@ def get_authenticated_service():
 
 
 # --------------------------------------------------------------------------
+# Channel / video verification
+#
+# videos().insert() succeeding only proves YouTube accepted the upload
+# under whatever channel the OAuth credentials resolve to — it does NOT
+# prove that's the intended channel. These two checks close that gap:
+# one before upload (fail fast, before wasting the upload), one after
+# (confirm the video actually landed where expected).
+# --------------------------------------------------------------------------
+
+def get_expected_channel_id() -> str:
+    return os.environ.get("YOUTUBE_CHANNEL_ID", "").strip()
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type(HttpError),
+    reraise=True,
+)
+def verify_authenticated_channel(youtube, expected_channel_id: str = "") -> dict:
+    """
+    Calls channels().list(mine=True) to find out which YouTube channel the
+    current OAuth credentials are actually authenticated as, and logs it.
+    If expected_channel_id is provided, raises RuntimeError on a mismatch
+    so the run stops BEFORE anything is uploaded.
+    """
+    response = youtube.channels().list(part="snippet,contentDetails", mine=True).execute()
+    items = response.get("items", [])
+    if not items:
+        raise RuntimeError(
+            "channels().list(mine=True) returned no channel for these credentials. "
+            "The authenticated Google account may not have a YouTube channel, or the "
+            "refresh token belongs to the wrong account."
+        )
+
+    channel = items[0]
+    channel_id = channel["id"]
+    snippet = channel.get("snippet", {})
+    channel_title = snippet.get("title", "<unknown>")
+    channel_handle = snippet.get("customUrl", "<none>")
+
+    log.info("Authenticated YouTube channel:")
+    log.info("  Title      : %s", channel_title)
+    log.info("  Channel ID : %s", channel_id)
+    log.info("  Handle     : %s", channel_handle)
+
+    if expected_channel_id:
+        if channel_id != expected_channel_id:
+            raise RuntimeError(
+                f"Authenticated channel is '{channel_title}' (ID: {channel_id}), which does "
+                f"NOT match the expected YOUTUBE_CHANNEL_ID ({expected_channel_id}). "
+                "Refusing to upload to the wrong channel."
+            )
+        log.info("Channel ID matches YOUTUBE_CHANNEL_ID — safe to upload.")
+    else:
+        log.warning(
+            "YOUTUBE_CHANNEL_ID is not set, so the destination channel above was NOT "
+            "verified against an expected value. Set it as a GitHub secret to enforce this check."
+        )
+
+    return {"channel_id": channel_id, "channel_title": channel_title, "channel_handle": channel_handle}
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type(HttpError),
+    reraise=True,
+)
+def verify_uploaded_video(youtube, video_id: str, expected_channel_id: str = "") -> dict:
+    """
+    Calls videos().list() right after upload to confirm the video actually
+    exists on YouTube and belongs to the expected channel, rather than
+    trusting videos().insert()'s response alone.
+    """
+    response = youtube.videos().list(part="snippet,status", id=video_id).execute()
+    items = response.get("items", [])
+    if not items:
+        raise RuntimeError(
+            f"Post-upload verification failed: videos().list() returned no video for ID "
+            f"'{video_id}'. The upload may not have actually completed on YouTube's side."
+        )
+
+    video = items[0]
+    snippet = video.get("snippet", {})
+    status = video.get("status", {})
+
+    result = {
+        "video_id": video_id,
+        "title": snippet.get("title"),
+        "channel_id": snippet.get("channelId"),
+        "channel_title": snippet.get("channelTitle"),
+        "privacy_status": status.get("privacyStatus"),
+        "upload_status": status.get("uploadStatus"),
+    }
+
+    log.info("Verified uploaded video (videos().list()):")
+    log.info("  Video ID       : %s", result["video_id"])
+    log.info("  Title          : %s", result["title"])
+    log.info("  Channel        : %s (%s)", result["channel_title"], result["channel_id"])
+    log.info("  Privacy status : %s", result["privacy_status"])
+    log.info("  Upload status  : %s", result["upload_status"])
+
+    if expected_channel_id and result["channel_id"] != expected_channel_id:
+        raise RuntimeError(
+            f"Verification FAILED: uploaded video {video_id}'s channelId "
+            f"'{result['channel_id']}' does not match expected YOUTUBE_CHANNEL_ID "
+            f"'{expected_channel_id}'."
+        )
+
+    return result
+
+
+# --------------------------------------------------------------------------
 # Upload
 # --------------------------------------------------------------------------
 
@@ -560,11 +681,41 @@ def main():
         save_history(history)
         sys.exit(1)
 
+    expected_channel_id = get_expected_channel_id()
+
+    try:
+        channel_info = verify_authenticated_channel(youtube, expected_channel_id)
+    except (HttpError, RuntimeError) as exc:
+        log.error("Pre-upload channel verification failed: %s", exc)
+        history = record_result(history, song_path.name, "failed", audio_hash=audio_hash, error=str(exc))
+        save_history(history)
+        sys.exit(1)
+
     try:
         video_id = upload_video(youtube, video_path, metadata, privacy_status=PRIVACY_STATUS)
     except HttpError as exc:
         log.error("YouTube API error during upload: %s", exc)
         history = record_result(history, song_path.name, "failed", audio_hash=audio_hash, error=str(exc))
+        save_history(history)
+        sys.exit(1)
+
+    try:
+        verification = verify_uploaded_video(youtube, video_id, expected_channel_id)
+    except (HttpError, RuntimeError) as exc:
+        # The video ID came back from YouTube, but we could NOT confirm it
+        # landed on the right channel (or at all) — do not report this as a
+        # verified success. Record it clearly and fail the Action so it's
+        # never silently mistaken for a normal successful run.
+        log.error("Post-upload verification failed: %s", exc)
+        history = record_result(
+            history,
+            song_path.name,
+            "failed",
+            audio_hash=audio_hash,
+            video_id=video_id,
+            url=f"https://youtu.be/{video_id}",
+            error=f"Upload returned a video ID but post-upload verification failed: {exc}",
+        )
         save_history(history)
         sys.exit(1)
 
@@ -580,9 +731,11 @@ def main():
         title=metadata["title"],
         privacy_status=PRIVACY_STATUS,
         url=f"https://youtu.be/{video_id}",
+        channel_id=verification["channel_id"],
+        channel_title=verification["channel_title"],
     )
     save_history(history)
-    log.info("Done. History saved to %s", HISTORY_PATH)
+    log.info("Done. Verified upload to '%s' (%s). History saved to %s", verification["channel_title"], verification["channel_id"], HISTORY_PATH)
 
 
 if __name__ == "__main__":
