@@ -78,6 +78,7 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
           PRIVACY_STATUS: ${{ github.event.inputs.privacy_status || 'unlisted' }}
           DEFAULT_PLAYLIST_ID: ${{ secrets.DEFAULT_PLAYLIST_ID }}
           MUSICGEN_DURATION_SECONDS: ${{ vars.MUSICGEN_DURATION_SECONDS || '60' }}
