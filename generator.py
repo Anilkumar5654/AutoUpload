@@ -185,7 +185,7 @@ def pick_next_song(songs_dir: str = SONGS_DIR, history: list = None) -> Path | N
 
     songs_path = Path(songs_dir)
     if not songs_path.exists():
-        raise FileNotFoundError(f"Songs directory '{songs_dir}' does not exist.")
+        songs_path.mkdir(parents=True, exist_ok=True)
 
     candidates = sorted(
         p for p in songs_path.iterdir()
@@ -516,8 +516,13 @@ def main():
         sys.exit(1)
 
     if song_path is None:
-        log.info("No new songs to upload — every track in '%s' is already published. Add more songs to continue.", SONGS_DIR)
-        return
+        log.info("No unpublished songs left in '%s' — generating a new original track with MusicGen.", SONGS_DIR)
+        try:
+            from music_generator import generate_track
+            song_path = generate_track(songs_dir=SONGS_DIR)
+        except Exception as exc:
+            log.error("Music generation failed: %s", exc)
+            sys.exit(1)
 
     log.info("Selected next song: %s", song_path.name)
 
